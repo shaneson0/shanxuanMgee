@@ -1,0 +1,359 @@
+%%%----------------------------------------------------------------------
+%%% @copyright 2010 mgee (Ming Game Engine Erlang)
+%%%
+%%% @author odinxu, 2010-1-19
+%%% @doc  team server.
+%%% @end
+%%%----------------------------------------------------------------------
+
+-module(mod_team_server).
+
+-behaviour(gen_server).
+%% --------------------------------------------------------------------
+%% Include files
+%% --------------------------------------------------------------------
+-include("mgee.hrl").
+-include("game_pb.hrl").
+-include("global_lang.hrl").
+
+-export([start/0, start_link/0]).
+-export([get_info/0]).
+-export([
+	handle/1
+]).
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+
+-define(ETS_ALL_TEAM_LIST, mgee_ets_all_team_list).
+-define(ETS_ROLEID_AT_TEAM, mgee_ets_roleid_at_team).
+
+-record( mod_team_server_status, { last_team_id } ).
+
+%% ====================================================================
+%% External functions
+%% ====================================================================
+
+%% ====================================================================
+%% Server functions
+%% ====================================================================
+
+start() ->
+	{ok, _} = supervisor:start_child(
+		mgee_sup,
+		{mod_team_sup,
+			{mod_team_sup, start_link, []},
+			transient, infinity, supervisor, [mod_team_sup]}),
+	{ok, _} = supervisor:start_child(
+		mgee_sup,
+		{mod_team_server,
+			{mod_team_server, start_link, []},
+			transient, brutal_kill, worker, [mod_team_server]}),
+	ok.
+
+%% start this server
+start_link() ->
+	gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+% @doc get module info
+get_info() ->
+	gen_server:call(?MODULE, info).
+
+handle({ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName}) ->
+	?DEBUG("~p ~p ~p", [Module, Method, Data]),
+	case Method of
+		<<"follow">> ->
+			TeamId = Data#m_team_follow_tos.teamid,
+			SetFollow = Data#m_team_follow_tos.set_follow,
+			gen_server:call(?MODULE, {follow, ClientSock, Roleid, RoleName, TeamId, SetFollow});
+		<<"list">> ->
+			gen_server:call(?MODULE, {list, ClientSock, Roleid, RoleName});
+		<<"create">> ->
+			gen_server:call(?MODULE, {create, ClientSock, Roleid, RoleName});
+		<<"invite">> ->
+			InviteRoleid = Data#m_team_invite_tos.roleid,
+			gen_server:call(?MODULE, {invite, ClientSock, Roleid, RoleName, InviteRoleid});
+		<<"accept">> ->
+			TeamId = Data#m_team_accept_tos.teamid,
+			gen_server:call(?MODULE, {accept, ClientSock, Roleid, RoleName, TeamId});
+		<<"refuse">> ->
+			TeamId = Data#m_team_refuse_tos.teamid,
+			gen_server:call(?MODULE, {refuse, ClientSock, Roleid, RoleName, TeamId});
+		<<"leave">> ->
+			TeamId = Data#m_team_leave_tos.teamid,
+			gen_server:call(?MODULE, {leave, ClientSock, Roleid, RoleName, TeamId});
+		<<"offline">> ->
+			gen_server:call(?MODULE, {offline, ClientSock, Roleid, RoleName});
+		<<"change_leader">> ->
+			TeamId = Data#m_team_change_leader_tos.teamid,
+			ToRoleid = Data#m_team_change_leader_tos.roleid,
+			ToRoleName = Data#m_team_change_leader_tos.rolename,
+			gen_server:call(?MODULE, {change_leader, ClientSock, Roleid, RoleName, TeamId, ToRoleid, ToRoleName});
+		Other ->
+			?ERROR_MSG("not implemented method of ~p :~p", [?MODULE, Other]),
+			not_implemented
+	end.
+
+
+%% --------------------------------------------------------------------
+%% Function: init/1
+%% Description: Initiates the server
+%% Returns: {ok, State}          |
+%%          {ok, State, Timeout} |
+%%          ignore               |
+%%          {stop, Reason}
+%% --------------------------------------------------------------------
+init([]) ->
+	ets:new(?ETS_ALL_TEAM_LIST, [set, protected, named_table]),
+	ets:new(?ETS_ROLEID_AT_TEAM, [set, protected, named_table]),
+
+	% ETS_ROLEID_AT_TEAM struc:  [ {roleid, teamid},  {roleid, teamid}, {roleid, teamid}, ....]
+	% ETS_ROLEID_AT_TEAM use for found roleid at which team.
+	%
+	% ETS_ALL_TEAM_LIST struc:   [ {teamid, teamdesc, pid}, {teamid, teamdesc, pid}, {teamid, teamdesc, pid}, ....]
+	%	
+	% add one record, use for  ets:update_counter()
+	% and auto incr teamid (like mysql primary key). the new teamid use for create team event.
+	ets:insert(?ETS_ALL_TEAM_LIST, {ets_update_counter_team_id_incr, 0}),
+	{ok, #mod_team_server_status{last_team_id = 0}}.
+
+%% --------------------------------------------------------------------
+%% Function: handle_call/3
+%% Description: Handling call messages
+%% Returns: {reply, Reply, State}          |
+%%          {reply, Reply, State, Timeout} |
+%%          {noreply, State}               |
+%%          {noreply, State, Timeout}      |
+%%          {stop, Reason, Reply, State}   | (terminate/2 is called)
+%%          {stop, Reason, State}            (terminate/2 is called)
+%% --------------------------------------------------------------------
+
+
+% @doc follow the team leader's walk... 
+handle_call( {follow, ClientSock, Roleid, RoleName, TeamId, SetFollow}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid, TeamId) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {follow, ClientSock, Roleid, RoleName, TeamId, SetFollow} );
+						_ ->
+							#m_team_follow_toc{succ=false,
+								reason=?_LANG_TEAM_NOT_EXISTS
+							}
+					end,
+	?DEBUG("follow team leader, ~p", [Reply]),
+	{reply, Reply, State};
+
+% @doc handle list event call
+handle_call( {list, ClientSock, Roleid, RoleName}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {list, ClientSock, Roleid, RoleName});
+						_ ->
+							ok
+					end,
+	?DEBUG("list team roles, ~p", [Reply]),
+	{reply, Reply, State};
+
+% @doc create a new team, only 1 person at team.
+handle_call( {create, ClientSock, Roleid, RoleName}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {list, ClientSock, Roleid, RoleName});
+						_ ->
+							case create_team(Roleid, RoleName) of
+								Pid2 when is_pid(Pid2) ->
+									gen_server:call(Pid2, {list, ClientSock, Roleid, RoleName});
+								_ ->
+									#m_team_create_toc{succ=false,
+										reason=?_LANG_TEAM_CREATE_FAIL
+									}
+							end
+					end,
+	?DEBUG("create team, ~p", [Reply]),
+	{reply, Reply, State};
+
+% @doc invite 
+handle_call( {invite, ClientSock, Roleid, RoleName, InviteRoleid}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {invite, ClientSock, Roleid, RoleName, InviteRoleid} );
+						_ ->
+							#m_team_invite_toc{succ=false,
+								reason=?_LANG_TEAM_NOT_EXISTS
+							}
+					end,
+	?DEBUG("invite team, ~p", [Reply]),
+	{reply, Reply, State};
+
+% @doc accept and join in the team
+handle_call( {accept, ClientSock, Roleid, RoleName, TeamId}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid, TeamId) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {accept, ClientSock, Roleid, RoleName, TeamId} );
+						_ ->
+							#m_team_accept_toc{succ=false,
+								reason=?_LANG_TEAM_NOT_EXISTS
+							}
+					end,
+	?DEBUG("accept team, ~p", [Reply]),
+	{reply, Reply, State};
+
+% @doc refuse the invite 
+handle_call( {refuse, ClientSock, Roleid, RoleName, TeamId}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid, TeamId) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {refuse, ClientSock, Roleid, RoleName, TeamId} );
+						_ ->
+							ignore
+					end,
+	?DEBUG("refuse team, ~p", [Reply]),
+	{reply, Reply, State};
+
+% @doc leave/exit the team 
+handle_call( {leave, ClientSock, Roleid, RoleName, TeamId}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid, TeamId) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {leave, ClientSock, Roleid, RoleName, TeamId} );
+						_ ->
+							#m_team_leave_toc{succ=false,
+								reason=?_LANG_TEAM_NOT_EXISTS
+							}
+					end,
+	?DEBUG("leave team, ~p", [Reply]),
+	{reply, Reply, State};
+
+% @doc team member offline...
+handle_call( {offline, ClientSock, Roleid, RoleName}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {offline, ClientSock, Roleid, RoleName} );
+						_ ->
+							ignore
+					end,
+	?DEBUG("offline team, ~p", [Reply]),
+	{reply, Reply, State};
+
+
+% @doc the team leader change 
+handle_call( {change_leader, ClientSock, Roleid, RoleName, TeamId, ToRoleid, ToRoleName}, _From, State) ->
+	Reply = case get_team_pid_by_roleid(Roleid, TeamId) of
+						Pid when is_pid(Pid) ->
+							gen_server:call(Pid, {change_leader, ClientSock, Roleid, RoleName, TeamId, ToRoleid, ToRoleName} );
+						_ ->
+							#m_team_change_leader_toc{	succ=false,
+								reason=?_LANG_TEAM_NOT_EXISTS
+							}
+					end,
+	?DEBUG("change_leader team, ~p", [Reply]),
+	{reply, Reply, State};
+
+
+% @doc handle get info
+handle_call( info, _From, State) ->
+	#mod_team_server_status{last_team_id = LastId} = State,
+	Reply = { LastId,
+		?ETS_ROLEID_AT_TEAM, ets:info(?ETS_ROLEID_AT_TEAM), ets:tab2list(?ETS_ROLEID_AT_TEAM),
+		?ETS_ALL_TEAM_LIST, ets:info(?ETS_ALL_TEAM_LIST), ets:tab2list(?ETS_ALL_TEAM_LIST)
+	},
+	{reply, Reply, State};
+
+handle_call(Request, From, State) ->
+	?INFO_MSG("~p handle_call from ~p : ~p", [?MODULE, From, Request]),
+	Reply = ok,
+	{reply, Reply, State}.
+
+%% --------------------------------------------------------------------
+%% Function: handle_cast/2
+%% Description: Handling cast messages
+%% Returns: {noreply, State}          |
+%%          {noreply, State, Timeout} |
+%%          {stop, Reason, State}            (terminate/2 is called)
+%% --------------------------------------------------------------------
+
+handle_cast(_Msg, State) ->
+	{noreply, State}.
+
+%% --------------------------------------------------------------------
+%% Function: handle_info/2
+%% Description: Handling all non call/cast messages
+%% Returns: {noreply, State}          |
+%%          {noreply, State, Timeout} |
+%%          {stop, Reason, State}            (terminate/2 is called)
+%% --------------------------------------------------------------------
+handle_info(_Info, State) ->
+	{noreply, State}.
+
+%% --------------------------------------------------------------------
+%% Function: terminate/2
+%% Description: Shutdown the server
+%% Returns: any (ignored by gen_server)
+%% --------------------------------------------------------------------
+terminate(_Reason, _State) ->
+	ok.
+
+%% --------------------------------------------------------------------
+%% Func: code_change/3
+%% Purpose: Convert process state when code is changed
+%% Returns: {ok, NewState}
+%% --------------------------------------------------------------------
+code_change(_OldVsn, State, _Extra) ->
+	{ok, State}.
+
+%% --------------------------------------------------------------------
+%%% Internal functions
+%% --------------------------------------------------------------------
+
+% @doc roleid auto incr one every call this func.
+get_new_team_id() ->
+	ets:update_counter(?ETS_ALL_TEAM_LIST, ets_update_counter_team_id_incr, 1).
+
+% @doc found roleid at which team.
+get_team_pid_by_roleid(Roleid) ->
+	?DEBUG("get_team_pid_by_roleid: ~p",[Roleid]),
+	case ets:lookup(?ETS_ROLEID_AT_TEAM, Roleid) of
+		[{Roleid,  TeamId }] ->
+			?DEBUG("get_team_pid_by_roleid found teamid: ~p",[TeamId]),
+			case ets:lookup(?ETS_ALL_TEAM_LIST, TeamId) of
+				[{TeamId, _TeamDesc, Pid}] ->
+					?DEBUG("get_team_pid_by_roleid found team pid: ~p",[Pid]),
+					Pid;
+				_ ->
+					not_found
+			end;
+		_ ->
+			not_found
+	end.
+get_team_pid_by_roleid(Roleid, TeamId) ->
+	?DEBUG("get_team_pid_by_roleid: ~p ~p",[Roleid, TeamId]),
+	case ets:lookup(?ETS_ROLEID_AT_TEAM, Roleid) of
+		[{Roleid,  TeamId }] ->
+			?DEBUG("get_team_pid_by_roleid found teamid: ~p",[TeamId]),
+			case ets:lookup(?ETS_ALL_TEAM_LIST, TeamId) of
+				[{TeamId, _TeamDesc, Pid}] ->
+					?DEBUG("get_team_pid_by_roleid found team pid: ~p",[Pid]),
+					Pid;
+				_ ->
+					not_found
+			end;
+		_ ->
+			not_found
+	end.
+
+
+% @doc create a new team
+create_team(Roleid, RoleName) ->
+	NewTeamID = get_new_team_id(),
+	TeamDesc = "team_" ++ integer_to_list(NewTeamID) ++ ", create by " ++ mgee_tool:to_list(RoleName),
+	case supervisor:start_child(mod_team_sup, [{NewTeamID, TeamDesc, Roleid, RoleName}]) of
+		{ok, Pid} ->
+			ets:insert(?ETS_ALL_TEAM_LIST, {NewTeamID, TeamDesc, Pid}),
+			ets:insert(?ETS_ROLEID_AT_TEAM, {Roleid, NewTeamID}),
+			?INFO_MSG("create new team ~p", [{NewTeamID, TeamDesc, Pid}]),
+			Pid;
+		{error, {alreay_started, Pid}} ->
+			Pid;
+		R ->
+			?INFO_MSG("create new team fail, ~p", [{NewTeamID, TeamDesc, R}]),
+			fail_satrt_child
+	end.
+	
+
