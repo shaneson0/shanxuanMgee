@@ -55,13 +55,76 @@ message m_friend_accept_toc {
 //函数：list	好友列表请求
 //---------------------------------
 
+message m_friend_list_tos {
+//	required int32 roleid = 1 ;
+}
+
+message m_friend_list_toc {
+	required bool 			succ		= 1 [default = true];
+	required bool 			return_self	= 2 [default = true];
+	optional string 		reason		= 3;
+
+	repeated int32 friendlist = 4 ;
+}
 
 
+//---------------------------------
+//函数：bad_add	添加黑名单
+//---------------------------------
 
+message m_friend_bad_add_tos {
+	required int32 roleid = 1 ;
+}
 
+message m_friend_bad_add_toc {
+	required bool 			succ		= 1 [default = true];
+	required bool 			return_self	= 2 [default = true];
+	optional string 		reason		= 3;
+}
 
+//---------------------------------
+//函数：bad_list	黑名单列表
+//---------------------------------
 
+message m_friend_bad_list_tos {
+}
 
+message m_friend_bad_list_toc {
+	required bool 			succ		= 1 [default = true];
+	required bool 			return_self	= 2 [default = true];
+	optional string 		reason		= 3;
+
+	repeated int32 blacklist = 4 ;
+}
+
+//---------------------------------
+//函数：enemy_add	增加仇人
+//---------------------------------
+
+message m_friend_enemy_add_tos {
+	required int32 roleid = 1 ;
+}
+
+message m_friend_enemy_add_toc {
+	required bool 			succ		= 1 [default = true];
+	required bool 			return_self	= 2 [default = true];
+	optional string 		reason		= 3;
+}
+
+//---------------------------------
+//函数：enemy_add	仇人列表
+//---------------------------------
+
+message m_friend_enemy_list_tos {
+}
+
+message m_friend_enemy_list_toc {
+	required bool 			succ		= 1 [default = true];
+	required bool 			return_self	= 2 [default = true];
+	optional string 		reason		= 3;
+
+	repeated int32 enemylist = 4 ;
+}
 
 
 message p_role_server_status {

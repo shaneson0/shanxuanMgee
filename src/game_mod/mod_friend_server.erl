@@ -11,6 +11,7 @@
 
 -behaviour(gen_server).
 
+-include("mgee_vo.hrl").
 -include("mgee.hrl").
 -include("game_pb.hrl").
 
@@ -27,6 +28,8 @@
 
 -export([start/0,handle/1]).
 
+-export([create_relation/1]).
+
 -define(SERVER, ?MODULE).
 
 -record(state, {}).
@@ -42,6 +45,11 @@ start() ->
       {mod_friend_server, start_link, []},
       transient, brutal_kill, worker, [mod_friend_server]}),
   ok.
+
+create_relation(Role_id) ->
+  ?DEBUG("create relation : ~p ~n ", [Role_id]) ,
+  gen_server:cast( ?MODULE , {create , Role_id} ).
+
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -74,6 +82,7 @@ start_link() ->
   {stop, Reason :: term()} | ignore).
 init([]) ->
 
+  ?INFO_MSG(" CREATE ETS_REATION  ~p~n" , ["aa"] ),
   ets:new( ?ETS_RELATION , [set , protected , named_table ] ),
 
   {ok, #state{}}.
@@ -94,12 +103,39 @@ init([]) ->
   {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
   {stop, Reason :: term(), NewState :: #state{}}).
 
-handle_call({accept , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName , FromRoleid } , _From , State ) ->
+
+
+handle_call( {enemy_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Enemy_id} , _From , State ) ->
+  Reply = insert_badlist_or_enemylist(Roleid , Enemy_id , enemy ),
+  {reply , Reply , State } ;
+handle_call({bad_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Add_Role_id},_From , State ) ->
+  Reply = insert_badlist_or_enemylist(Roleid , Add_Role_id , badlist ),
+  {reply , Reply , State};
+handle_call({bad_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName},_From , State ) ->
+  Reply = get_role_list(Roleid,blacklist),
+  {reply , Reply , State };
+handle_call({enemy_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName},_From , State ) ->
+  Reply = get_role_list(Roleid,enemy),
+  {reply , Reply , State };
+handle_call({list, _ClientSock, _Module, _Method, _Data, _AccountName, Roleid, _RoleName } , _From , State ) ->
+  Reply = get_role_list(Roleid,friend),
+  {reply,Reply,State};
+handle_call({accept , _ClientSock, _Module, _Method, Data, _AccountName, Roleid, _RoleName , FromRoleid } , _From , State ) ->
 
   %%邀请成功，更新双方的好友列表
+  insert_friend_ets(Roleid,FromRoleid),
 
+  case mgee_misc:get_socket_by_roleid(FromRoleid) of
+    {ok , ToClientSocket} ->
+      DataRecord = #m_friend_accept_toc{succ = true , return_self = false },
+      mgee_packet:packet_encode_send( ToClientSocket , _Module , _Method , DataRecord );
+    true ->
+      %%被邀请人用户不在线并没有关系
+      ok
+  end,
 
-  ok;
+  Reply = #m_friend_accept_toc{dest_roleid = FromRoleid},
+  {reply,Reply,State};
 handle_call( {invite, Module , Method ,  ClientSock, Roleid, RoleName, InviteRoleid} , _From , State ) ->
   ?DEBUG("~p invite good friend , roleid:~p,",[self(), Roleid]),
 
@@ -133,6 +169,10 @@ handle_call(_Request, _From, State) ->
   {noreply, NewState :: #state{}} |
   {noreply, NewState :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #state{}}).
+
+handle_cast({create , Role_id} , State ) ->
+  ets:insert( ?ETS_RELATION , {Role_id ,  #relation{ friends = [] , blacklist = [] , enemy = [] , offended_list = [] } } ),
+  {noreply , State };
 handle_cast(_Request, State) ->
   {noreply, State}.
 
@@ -191,15 +231,37 @@ code_change(_OldVsn, State, _Extra) ->
 handle({ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName}) ->
   ?DEBUG("~p ~p ~p", [Module, Method, Data]),
   case Method of
+
     <<"invite">> ->
       invite(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName);
     <<"accept">> ->
       accept( ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName );
-    <<"list">> -> ok ;
-    <<"bad_add">> -> ok ;
-    <<"bad_del">> -> ok ;
-    <<"bad_list">> -> ok
+    <<"list">> ->
+      list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName);
+    <<"bad_add">> ->
+      bad_add(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName);
+    <<"bad_list">> ->
+      bad_list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName);
+    <<"enemy_add">> ->
+      enemy_add(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName);
+    <<"enemy_list">> ->
+      enemy_list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName)
   end.
+
+bad_add(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
+  Add_Role_id = Data#m_friend_bad_add_tos.roleid ,
+  gen_server:call(?MODULE , {bad_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Add_Role_id}).
+
+bad_list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
+  gen_server:call( ?MODULE , {bad_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName }).
+
+enemy_add(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
+  Enemy_id = Data#m_friend_enemy_add_tos.roleid ,
+  gen_server:call(?MODULE , {enemy_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Enemy_id}).
+
+enemy_list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
+  gen_server:call(?MODULE , {enemy_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName}).
+
 
 invite( ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName ) ->
   InviteRoleid = Data#m_friend_invite_tos.dest_roleid ,
@@ -208,5 +270,53 @@ invite( ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName ) ->
 accept( ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName ) ->
   FromRoleid = Data#m_friend_accept_tos.from_roleid ,
   gen_server:call(?MODULE , {accept , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName , FromRoleid }).
+
+list( ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName ) ->
+  gen_server:call(?MODULE , {list, ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName } , infinity ) .
+
+insert_friend_ets(From_id , Dest_id) ->
+  %Dest to From
+  [{ _ , OldRelation } ] = ets:lookup( ?ETS_RELATION , From_id ),
+  OldFriendList = OldRelation#relation.friends ,
+  NewFriendList = [ Dest_id | OldFriendList ] ,
+  ets:insert( ?ETS_RELATION ,  { From_id , OldRelation#relation{friends = NewFriendList}  } ) ,
+
+  %From to Dest
+  [{ _ , OldRelation1 } ] = ets:lookup( ?ETS_RELATION , Dest_id ),
+  OldFriendList1 = OldRelation1#relation.friends ,
+  NewFriendList1 = [ From_id | OldFriendList1 ] ,
+  ets:insert( ?ETS_RELATION , { Dest_id ,  OldRelation#relation{friends = NewFriendList1} } ).
+
+
+get_role_list(Roleid , Options ) ->
+  [{ _ , Relation_record}] = ets:lookup(?ETS_RELATION , Roleid ) ,
+  case Options of
+    friend ->
+      #m_friend_list_toc{friendlist = Relation_record#relation.friends } ;
+    enemy ->
+      #m_friend_enemy_list_toc{enemylist = Relation_record#relation.enemy } ;
+    badlist ->
+      #m_friend_bad_list_toc{ blacklist  = Relation_record#relation.blacklist }
+  end.
+
+insert_badlist_or_enemylist( From_Role_id , Dest_Role_id , Options ) ->
+  [{ _ , OldRelation } ] = ets:lookup( ?ETS_RELATION , From_Role_id ),
+  case Options of
+     enemy ->
+       OldEnemyList = OldRelation#relation.enemy ,
+       NewEnemyList = [ Dest_Role_id | OldEnemyList ] ,
+       ets:insert( ?ETS_RELATION ,  { From_Role_id , OldRelation#relation{enemy   = NewEnemyList}  } ),
+       #m_friend_enemy_add_toc{succ = true};
+    badlist ->
+      OldBadList = OldRelation#relation.blacklist ,
+      NewBadList = [ Dest_Role_id | OldBadList ] ,
+      ets:insert( ?ETS_RELATION ,  { From_Role_id , OldRelation#relation{blacklist    = NewBadList}  } ),
+      #m_friend_bad_add_toc{succ = true}
+end.
+
+
+
+
+
 
 

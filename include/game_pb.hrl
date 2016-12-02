@@ -4,6 +4,16 @@
 -record(m_friend_invite_toc, {succ=true, return_self=true, reason, from_roleid, from_rolename}).
 -record(m_friend_accept_tos, {from_roleid}).
 -record(m_friend_accept_toc, {succ=true, return_self=true, reason, dest_roleid, dest_rolename}).
+-record(m_friend_list_tos, {}).
+-record(m_friend_list_toc, {succ=true, return_self=true, reason, friendlist}).
+-record(m_friend_bad_add_tos, {roleid}).
+-record(m_friend_bad_add_toc, {succ=true, return_self=true, reason}).
+-record(m_friend_bad_list_tos, {}).
+-record(m_friend_bad_list_toc, {succ=true, return_self=true, reason, blacklist}).
+-record(m_friend_enemy_add_tos, {roleid}).
+-record(m_friend_enemy_add_toc, {succ=true, return_self=true, reason}).
+-record(m_friend_enemy_list_tos, {}).
+-record(m_friend_enemy_list_toc, {succ=true, return_self=true, reason, enemylist}).
 -record(p_role_server_status, {roleinfo, lastpath}).
 -record(p_role_status_list, {role_status}).
 -record(p_game_role_disply, {type, value}).

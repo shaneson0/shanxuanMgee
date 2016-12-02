@@ -3,7 +3,7 @@
 
 #Erlang
 
-as_path=/mnt/hgfs/workdir/mgee/mgee_connect/mgee_connect/src
+as_path=/mnt/hgfs/workdir/mgee/client/mgee_connect/src
 
 cd ../../ebin
 

@@ -65,6 +65,7 @@ handle({_ClientSock, Module, Method, Data, AccountName, _Roleid, _RoleName}) ->
 		<<"flash_login">> ->
 			List = gen_server:call(?MODULE, {list_no_binary, AccountName}),
 			#m_login_flash_login_toc{result=#p_role_list{role=List}};
+
 		<<"list">> ->
 			mgee_account_server:list_role(AccountName);
 		<<"add">> -> 
@@ -189,8 +190,18 @@ handle_call( {add, AccountName, RoleName, Sex, SkinId},
 						}
 									| RoleList ],
 					?DEBUG("add more role [~p] for account [~p]", [RoleName, AccountName]),
+
+					%%				创建到用户的关系表
+					mod_friend_server:create_relation(NewRoleID),
+
+
 					ets:insert(EtsAccList, { AccountName, RoleListNew} ),
-    				RoleListNew				
+    				RoleListNew
+
+
+
+
+
 				end;
 			R -> 
 				?DEBUG("ets lookup [~p, ~p] result: ~p", [EtsAccList, AccountName, R]),
