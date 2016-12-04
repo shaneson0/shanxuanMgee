@@ -105,20 +105,20 @@ init([]) ->
 
 
 
-handle_call( {enemy_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Enemy_id} , _From , State ) ->
-  Reply = insert_badlist_or_enemylist(Roleid , Enemy_id , enemy ),
+handle_call( {enemy_add = Mec , _AccountName, Roleid,Enemy_id} , _From , State ) ->
+  Reply = insert_badlist_or_enemylist(Roleid , Enemy_id , Mec ),
   {reply , Reply , State } ;
-handle_call({bad_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Add_Role_id},_From , State ) ->
-  Reply = insert_badlist_or_enemylist(Roleid , Add_Role_id , badlist ),
+handle_call({bad_add = Mec , _AccountName, Roleid,Add_Role_id},_From , State ) ->
+  Reply = insert_badlist_or_enemylist(Roleid , Add_Role_id , Mec ),
   {reply , Reply , State};
-handle_call({bad_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName},_From , State ) ->
-  Reply = get_role_list(Roleid,blacklist),
+handle_call({bad_list = Mec,  Roleid},_From , State ) ->
+  Reply = get_role_list(Roleid,Mec),
   {reply , Reply , State };
-handle_call({enemy_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName},_From , State ) ->
-  Reply = get_role_list(Roleid,enemy),
+handle_call({enemy_list = Mec ,  Roleid },_From , State ) ->
+  Reply = get_role_list(Roleid, Mec),
   {reply , Reply , State };
-handle_call({list, _ClientSock, _Module, _Method, _Data, _AccountName, Roleid, _RoleName } , _From , State ) ->
-  Reply = get_role_list(Roleid,friend),
+handle_call({list = Mec, _ClientSock, _Module, _Method, _Data, _AccountName, Roleid, _RoleName } , _From , State ) ->
+  Reply = get_role_list(Roleid,Mec),
   {reply,Reply,State};
 handle_call({accept , _ClientSock, _Module, _Method, Data, _AccountName, Roleid, _RoleName , FromRoleid } , _From , State ) ->
 
@@ -136,24 +136,49 @@ handle_call({accept , _ClientSock, _Module, _Method, Data, _AccountName, Roleid,
 
   Reply = #m_friend_accept_toc{dest_roleid = FromRoleid},
   {reply,Reply,State};
+
+%%check_is_in_blacklist( From_Role_id , Dest_Role_id  ) ->
+%%  [{_,Relation}] = ets:lookup(?ETS_RELATION , Dest_Role_id) ,
+%%  BlackList = Relation#relation.blacklist ,
+%%  case lists:keyfind(From_Role_id,1,BlackList) of
+%%    false -> flase ; %%并不在黑名单
+%%    _ -> true        %%在黑名单列表
+%%  end.
+%%
+%%check_is_in_enemy( From_Role_id , Dest_Role_id ) ->
+
+
 handle_call( {invite, Module , Method ,  ClientSock, Roleid, RoleName, InviteRoleid} , _From , State ) ->
   ?DEBUG("~p invite good friend , roleid:~p,",[self(), Roleid]),
 
-  %todo ,返回给InviteRoleid相应的信息
+  %todo ,验证双方是否已经是好友了
+  case check_is_in_list(Roleid , InviteRoleid , list ) of
+     false  -> Reply = #m_friend_invite_toc{succ = false , return_self = true ,reason = <<"双方已经是好友了">>};
+      true ->
 
-  case mgee_misc:get_socket_by_roleid(InviteRoleid) of
-    {ok, ToClientSock} ->
-      DataRecord = #m_friend_invite_toc{ succ = true , return_self = false , from_roleid = Roleid , from_rolename = RoleName  } ,
-      mgee_packet:packet_encode_send(ToClientSock, Module, Method, DataRecord);
-    Wrong ->
-      DataRecord = #m_chat_private_toc{succ=false, reason= <<"用户不在线！">>},
-      mgee_packet:packet_encode_send(ClientSock, Module, Method, DataRecord),
-      ?DEBUG("find pid ~p socket failed", Wrong)
-  end,
+        Reply = case check_is_in_blacklist(Roleid , InviteRoleid )  of
+            true ->  #m_friend_invite_toc{succ = false , return_self = true ,reason = <<"你被对方拉进黑名单了">>} ;
+            false ->
 
 
-  %%返回给用户表示邀请成功
-  Reply = #m_friend_invite_toc{succ = true , return_self = true },
+              case check_is_in_enemy( Roleid , InviteRoleid )  of
+                true -> #m_friend_invite_toc{succ = false , return_self = true ,reason = <<"你是对方的仇人，无法添加为好友">>} ;
+                false ->
+
+                  %todo ,返回给InviteRoleid相应的信息
+                  case mgee_misc:get_socket_by_roleid(InviteRoleid) of
+                    {ok, ToClientSock} ->
+                      DataRecord = #m_friend_invite_toc{ succ = true , return_self = false , from_roleid = Roleid , from_rolename = RoleName  } ,
+                      mgee_packet:packet_encode_send(ToClientSock, Module, Method, DataRecord),
+                      #m_friend_invite_toc{succ = true , return_self = true };
+                    _Wrong ->
+                      #m_chat_private_toc{succ=false, reason= <<"用户不在线！">>}
+                  end
+              end
+
+          end
+end,
+
   {reply , Reply , State } ;
 handle_call(_Request, _From, State) ->
   {reply, ok, State}.
@@ -248,19 +273,19 @@ handle({ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName}) ->
       enemy_list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName)
   end.
 
-bad_add(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
+bad_add(_ClientSock, _Module, _Method, Data, _AccountName, Roleid, _RoleName) ->
   Add_Role_id = Data#m_friend_bad_add_tos.roleid ,
-  gen_server:call(?MODULE , {bad_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Add_Role_id}).
+  gen_server:call(?MODULE , {bad_add ,_AccountName, Roleid,Add_Role_id}).
 
-bad_list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
-  gen_server:call( ?MODULE , {bad_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName }).
+bad_list(_ClientSock, _Module, _Method, _Data, _AccountName, Roleid, _RoleName) ->
+  gen_server:call( ?MODULE , {bad_list , Roleid }).
 
-enemy_add(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
+enemy_add(_ClientSock, _Module, _Method, Data, _AccountName, Roleid, _RoleName) ->
   Enemy_id = Data#m_friend_enemy_add_tos.roleid ,
-  gen_server:call(?MODULE , {enemy_add,ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName,Enemy_id}).
+  gen_server:call(?MODULE , {enemy_add, _AccountName, Roleid, Enemy_id}).
 
-enemy_list(ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName) ->
-  gen_server:call(?MODULE , {enemy_list , ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName}).
+enemy_list(_ClientSock, _Module, _Method, _Data, _AccountName, Roleid, _RoleName) ->
+  gen_server:call(?MODULE , {enemy_list , Roleid}).
 
 
 invite( ClientSock, Module, Method, Data, _AccountName, Roleid, RoleName ) ->
@@ -291,29 +316,65 @@ insert_friend_ets(From_id , Dest_id) ->
 get_role_list(Roleid , Options ) ->
   [{ _ , Relation_record}] = ets:lookup(?ETS_RELATION , Roleid ) ,
   case Options of
-    friend ->
+    list ->
       #m_friend_list_toc{friendlist = Relation_record#relation.friends } ;
-    enemy ->
+    enemy_list ->
       #m_friend_enemy_list_toc{enemylist = Relation_record#relation.enemy } ;
-    badlist ->
+    bad_list ->
       #m_friend_bad_list_toc{ blacklist  = Relation_record#relation.blacklist }
   end.
 
 insert_badlist_or_enemylist( From_Role_id , Dest_Role_id , Options ) ->
   [{ _ , OldRelation } ] = ets:lookup( ?ETS_RELATION , From_Role_id ),
   case Options of
-     enemy ->
+    enemy_add ->
+
+%%      增加From_role_id的仇人列表
        OldEnemyList = OldRelation#relation.enemy ,
        NewEnemyList = [ Dest_Role_id | OldEnemyList ] ,
        ets:insert( ?ETS_RELATION ,  { From_Role_id , OldRelation#relation{enemy   = NewEnemyList}  } ),
+
+%%      增加Dest_Role_id的得罪列表
+      insert_offlend_list(From_Role_id,Dest_Role_id),
+
+
        #m_friend_enemy_add_toc{succ = true};
-    badlist ->
+    bad_add ->
       OldBadList = OldRelation#relation.blacklist ,
       NewBadList = [ Dest_Role_id | OldBadList ] ,
       ets:insert( ?ETS_RELATION ,  { From_Role_id , OldRelation#relation{blacklist    = NewBadList}  } ),
       #m_friend_bad_add_toc{succ = true}
 end.
 
+insert_offlend_list( From_Role_id , Dest_Role_id ) ->
+  [{ _ , OldRelation } ] = ets:lookup( ?ETS_RELATION , Dest_Role_id ),
+  OldOffendList = OldRelation#relation.offended_list ,
+  NewOffendList = [ From_Role_id | OldOffendList ] ,
+  ets:insert(?ETS_RELATION , {Dest_Role_id , OldRelation#relation{offended_list = NewOffendList}}).
+
+
+check_is_in_list( From_Role_id , Dest_Role_id , Option  ) ->
+  case Option of
+    list -> ok;
+    enemy_list ->ok ;
+    bad_list ->ok
+end.
+
+check_is_in_blacklist( From_Role_id , Dest_Role_id  ) ->
+  [{_,Relation}] = ets:lookup(?ETS_RELATION , Dest_Role_id) ,
+  BlackList = Relation#relation.blacklist ,
+  case lists:keyfind(From_Role_id,1,BlackList) of
+     false -> flase ; %%并不在黑名单
+      _ -> true        %%在黑名单列表
+end.
+
+check_is_in_enemy( From_Role_id , Dest_Role_id ) ->
+  [{_,Relation}] = ets:lookup(?ETS_RELATION , Dest_Role_id) ,
+  EnemyList = Relation#relation.enemy ,
+  case lists:keyfind(From_Role_id) of
+      false -> flase  ;   %%并不在仇人列表
+      _ -> true
+  end.                    %在仇人列表
 
 
 
